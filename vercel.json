@@ -2,11 +2,8 @@
   "version": 2,
   "builds": [
     {
-      "src": "api/scan.py",
-      "use": "@vercel/python",
-      "config": {
-        "runtime": "python3.9"
-      }
+      "src": "api/index.js",
+      "use": "@vercel/node"
     }
   ],
   "routes": [
@@ -16,7 +13,7 @@
     },
     {
       "src": "/(.*)",
-      "dest": "/api/scan.py"
+      "dest": "/api/index.js"
     }
   ]
 }

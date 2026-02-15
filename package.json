@@ -1,0 +1,9 @@
+{
+  "name": "gofile-scanner-api",
+  "version": "1.0.0",
+  "description": "GoFile Scanner API for Vercel",
+  "main": "api/index.js",
+  "dependencies": {
+    "@vercel/node": "^3.0.0"
+  }
+}
