@@ -1,31 +1,16 @@
 #!/usr/bin/env python3
 """
 GoFile Scanner API for Vercel Deployment
-Webhook-enabled GoFile URL scanner
 """
 
-import requests
 import json
+import requests
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import string
 import random
-import sys
 import urllib.parse
-
-# Codes couleur pour le terminal (pour le debug)
-class Colors:
-    RED = '\033[91m'
-    GREEN = '\033[92m'
-    YELLOW = '\033[93m'
-    BLUE = '\033[94m'
-    MAGENTA = '\033[95m'
-    CYAN = '\033[96m'
-    WHITE = '\033[97m'
-    BOLD = '\033[1m'
-    UNDERLINE = '\033[4m'
-    END = '\033[0m'
 
 class GoFileScanner:
     def __init__(self, webhook_url=None, max_threads=50, delay=0.1):
@@ -37,109 +22,94 @@ class GoFileScanner:
         self.total_urls = 0
         self.session = requests.Session()
         self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
         
     def generate_gofile_id(self, length=6):
-        """Generate random GoFile ID"""
         chars = string.ascii_uppercase + string.ascii_lowercase + string.digits
         return ''.join(random.choice(chars) for _ in range(length))
     
     def check_gofile_url(self, file_id):
-        """Check if GoFile URL exists and has content"""
         url = f"https://gofile.io/d/{file_id}"
         
         try:
             response = self.session.get(url, timeout=10)
             
             if response.status_code == 200:
-                # Check if it's a valid GoFile page
                 if 'gofile.io' in response.text and 'contentId' in response.text:
-                    # Try to extract file information
-                    try:
-                        # Look for file data in the page
-                        if '"files":' in response.text:
-                            # Extract JSON data
-                            start = response.text.find('"files":')
-                            if start != -1:
-                                # Find the end of the JSON object
-                                bracket_count = 0
-                                end = start
-                                for i, char in enumerate(response.text[start:], start):
-                                    if char == '{':
-                                        bracket_count += 1
-                                    elif char == '}':
-                                        bracket_count -= 1
-                                        if bracket_count == 0:
-                                            end = i + 1
-                                            break
-                                
-                                if end > start:
-                                    json_str = response.text[start:end]
-                                    try:
-                                        file_data = json.loads('{' + json_str + '}')
+                    if '"files":' in response.text:
+                        start = response.text.find('"files":')
+                        if start != -1:
+                            bracket_count = 0
+                            end = start
+                            for i, char in enumerate(response.text[start:], start):
+                                if char == '{':
+                                    bracket_count += 1
+                                elif char == '}':
+                                    bracket_count -= 1
+                                    if bracket_count == 0:
+                                        end = i + 1
+                                        break
+                            
+                            if end > start:
+                                json_str = response.text[start:end]
+                                try:
+                                    file_data = json.loads('{' + json_str + '}')
+                                    
+                                    files_info = []
+                                    for file_id, file_info in file_data.get('files', {}).items():
+                                        files_info.append({
+                                            'name': file_info.get('name', 'Unknown'),
+                                            'size': file_info.get('size', 0),
+                                            'type': file_info.get('mimeType', 'Unknown'),
+                                            'link': file_info.get('link', ''),
+                                            'md5': file_info.get('md5', ''),
+                                            'created': file_info.get('created', '')
+                                        })
+                                    
+                                    if files_info:
+                                        result = {
+                                            'url': url,
+                                            'status': 'FOUND',
+                                            'files': files_info,
+                                            'total_files': len(files_info),
+                                            'total_size': sum(f['size'] for f in files_info)
+                                        }
                                         
-                                        # Extract file information
-                                        files_info = []
-                                        for file_id, file_info in file_data.get('files', {}).items():
-                                            files_info.append({
-                                                'name': file_info.get('name', 'Unknown'),
-                                                'size': file_info.get('size', 0),
-                                                'type': file_info.get('mimeType', 'Unknown'),
-                                                'link': file_info.get('link', ''),
-                                                'md5': file_info.get('md5', ''),
-                                                'created': file_info.get('created', '')
-                                            })
+                                        self.send_to_webhook(result)
+                                        self.found_urls.append(result)
+                                        return result
                                         
-                                        if files_info:
-                                            result = {
-                                                'url': url,
-                                                'status': 'FOUND',
-                                                'files': files_info,
-                                                'total_files': len(files_info),
-                                                'total_size': sum(f['size'] for f in files_info)
-                                            }
-                                            
-                                            self.send_to_webhook(result)
-                                            self.found_urls.append(result)
-                                            return result
-                                            
-                                    except json.JSONDecodeError:
-                                        pass
-                        
-                        # If we can't parse JSON but it's a valid GoFile page
-                        result = {
-                            'url': url,
-                            'status': 'VALID_PAGE',
-                            'message': 'GoFile page found but content could not be parsed'
-                        }
-                        
-                        self.send_to_webhook(result)
-                        self.found_urls.append(result)
-                        return result
-                        
-                    except Exception as e:
-                        pass
+                                except json.JSONDecodeError:
+                                    pass
+                    
+                    result = {
+                        'url': url,
+                        'status': 'VALID_PAGE',
+                        'message': 'GoFile page found but content could not be parsed'
+                    }
+                    
+                    self.send_to_webhook(result)
+                    self.found_urls.append(result)
+                    return result
             
             elif response.status_code == 404:
                 return None
                 
-        except Exception as e:
+        except Exception:
             pass
         
         return None
     
     def send_to_webhook(self, data):
-        """Send found URL to webhook"""
         if not self.webhook_url:
             return
             
         try:
-            # Create Discord embed
             embed = {
                 "title": "🔍 GoFile Scanner - FOUND!",
                 "url": data['url'],
-                "color": 5814783,  # Green color
+                "color": 5814783,
                 "fields": []
             }
             
@@ -156,8 +126,7 @@ class GoFileScanner:
                     "inline": True
                 })
                 
-                # Add file details
-                for i, file_info in enumerate(data['files'][:5]):  # Show first 5 files
+                for i, file_info in enumerate(data['files'][:5]):
                     field_name = f"📄 {file_info['name']}"
                     field_value = f"Size: {file_info['size'] / (1024*1024):.2f} MB\n"
                     if file_info['link']:
@@ -176,7 +145,6 @@ class GoFileScanner:
                         "value": f"And {len(data['files']) - 5} more files...",
                         "inline": False
                     })
-                    
             else:
                 embed["fields"].append({
                     "name": "📄 Status",
@@ -197,11 +165,10 @@ class GoFileScanner:
             
             requests.post(self.webhook_url, json=payload, timeout=10)
             
-        except Exception as e:
+        except Exception:
             pass
     
     def scan_specific_ids(self, file_ids):
-        """Scan specific GoFile IDs"""
         results = []
         
         with ThreadPoolExecutor(max_workers=self.max_threads) as executor:
@@ -223,86 +190,21 @@ class GoFileScanner:
                     if self.delay > 0:
                         time.sleep(self.delay)
                         
-                except Exception as e:
+                except Exception:
                     pass
         
         return results
     
     def scan_common_patterns(self):
-        """Scan common GoFile ID patterns"""
         common_patterns = [
-            # Common patterns from user
             'IIAxbd', 'ABCDEF', '123456', 'TEST01', 'DEMO01',
-            # Add more common patterns
             'FILE01', 'DATA01', 'DOC001', 'IMG001', 'VID001',
             'WORK01', 'PROJ01', 'TEMP01', 'BACKUP', 'CONFIG',
         ]
         
         return self.scan_specific_ids(common_patterns)
 
-# Vercel entry point - this is the main function Vercel will call
 def handler(event, context=None):
-    """Main handler for Vercel serverless function"""
-    
-    # Handle AWS Lambda style event
-    if isinstance(event, dict) and 'httpMethod' in event:
-        # AWS Lambda format
-        method = event.get('httpMethod', 'GET')
-        body = event.get('body', '{}')
-        query_params = event.get('queryStringParameters', {}) or {}
-        
-        # Create request-like object
-        class Request:
-            def __init__(self):
-                self.method = method
-                self.body = body
-                self.args = query_params
-        
-        request = Request()
-        
-        # Parse body if it's a POST request
-        if method == 'POST' and body:
-            try:
-                if isinstance(body, str):
-                    parsed_body = json.loads(body)
-                else:
-                    parsed_body = body
-            except:
-                parsed_body = {}
-        else:
-            parsed_body = {}
-        
-        # Merge query params and body
-        all_params = {**query_params, **parsed_body}
-        
-    else:
-        # Direct request object (for testing)
-        request = event
-        all_params = {}
-        
-        if hasattr(request, 'json') and callable(request.json):
-            try:
-                all_params = request.json()
-            except:
-                pass
-        elif hasattr(request, 'body') and request.body:
-            try:
-                if isinstance(request.body, str):
-                    all_params = json.loads(request.body)
-                else:
-                    all_params = json.loads(request.body.decode('utf-8'))
-            except:
-                pass
-        
-        # Also check query parameters for GET requests
-        if hasattr(request, 'args') and request.args:
-            all_params.update(request.args)
-        elif hasattr(request, 'query_string') and request.query_string:
-            query_string = request.query_string.decode('utf-8')
-            query_params = dict(urllib.parse.parse_qsl(query_string))
-            all_params.update(query_params)
-    
-    # Enable CORS
     headers = {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
@@ -310,14 +212,8 @@ def handler(event, context=None):
         'Content-Type': 'application/json'
     }
     
-    # Handle OPTIONS request for CORS
+    # Handle OPTIONS request
     if isinstance(event, dict) and event.get('httpMethod') == 'OPTIONS':
-        return {
-            'statusCode': 200,
-            'headers': headers,
-            'body': ''
-        }
-    elif hasattr(request, 'method') and request.method == 'OPTIONS':
         return {
             'statusCode': 200,
             'headers': headers,
@@ -325,7 +221,45 @@ def handler(event, context=None):
         }
     
     try:
-        # Get parameters from merged params
+        # Parse request
+        body = {}
+        query_params = {}
+        
+        if isinstance(event, dict):
+            # AWS Lambda format
+            method = event.get('httpMethod', 'GET')
+            body_data = event.get('body', '{}')
+            query_params = event.get('queryStringParameters', {}) or {}
+            
+            if method == 'POST' and body_data:
+                try:
+                    if isinstance(body_data, str):
+                        body = json.loads(body_data)
+                    else:
+                        body = body_data
+                except:
+                    body = {}
+        else:
+            # Direct request
+            method = getattr(event, 'method', 'GET')
+            if hasattr(event, 'json') and callable(event.json):
+                try:
+                    body = event.json()
+                except:
+                    body = {}
+            elif hasattr(event, 'body') and event.body:
+                try:
+                    if isinstance(event.body, str):
+                        body = json.loads(event.body)
+                    else:
+                        body = json.loads(event.body.decode('utf-8'))
+                except:
+                    body = {}
+        
+        # Merge parameters
+        all_params = {**query_params, **body}
+        
+        # Get parameters
         webhook_url = all_params.get('webhook')
         count = int(all_params.get('count', 100))
         threads = int(all_params.get('threads', 50))
@@ -342,18 +276,15 @@ def handler(event, context=None):
         if delay > 5:
             delay = 5
         
-        # Create scanner
+        # Create scanner and run
         scanner = GoFileScanner(webhook_url, threads, delay)
         
-        # Perform scan
         if patterns:
             results = scanner.scan_common_patterns()
         else:
-            # Generate random IDs
             file_ids = [scanner.generate_gofile_id() for _ in range(count)]
             results = scanner.scan_specific_ids(file_ids)
         
-        # Prepare response
         response_data = {
             'success': True,
             'scanned_count': scanner.scanned_count,
@@ -386,48 +317,13 @@ def handler(event, context=None):
             })
         }
 
-# Vercel serverless function entry point
-def lambda_handler(event, context):
-    """AWS Lambda style handler for Vercel compatibility"""
-    class MockRequest:
-        def __init__(self, event):
-            self.method = event.get('httpMethod', 'GET')
-            self.body = event.get('body', '{}')
-            self.query_string = event.get('queryStringParameters', {})
-            
-            # Convert query parameters to string format
-            if self.query_string:
-                query_parts = []
-                for key, value in self.query_string.items():
-                    query_parts.append(f"{key}={value}")
-                self.query_string = '&'.join(query_parts)
-            else:
-                self.query_string = ''
-        
-        def json(self):
-            if self.body:
-                return json.loads(self.body)
-            return {}
-    
-    request = MockRequest(event)
-    return handler(request)
-
-# Vercel serverless function entry point
-def main(request):
-    return handler(request)
-
-# Default Vercel entry point
-handler_func = handler
-
 # For local testing
 if __name__ == "__main__":
     class MockRequest:
-        def __init__(self, method='GET', body='{}', query_string=''):
+        def __init__(self, method='GET', body='{}'):
             self.method = method
             self.body = body
-            self.query_string = query_string
     
-    # Test the API
     test_request = MockRequest(
         method='POST',
         body=json.dumps({
