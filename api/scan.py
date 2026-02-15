@@ -12,7 +12,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import string
 import random
 import sys
-from http.server import BaseHTTPRequestHandler
 import urllib.parse
 
 # Codes couleur pour le terminal (pour le debug)
@@ -261,16 +260,32 @@ def handler(request):
         }
     
     try:
-        # Parse request body
-        if request.method == 'POST':
+        # Parse request body for Vercel
+        body = {}
+        
+        if hasattr(request, 'json') and callable(request.json):
+            # Vercel's request object has json() method
             try:
-                body = json.loads(request.body)
+                body = request.json()
             except:
                 body = {}
-        else:
-            # Parse query parameters for GET requests
+        elif hasattr(request, 'body') and request.body:
+            # Fallback to raw body parsing
+            try:
+                if isinstance(request.body, str):
+                    body = json.loads(request.body)
+                else:
+                    body = json.loads(request.body.decode('utf-8'))
+            except:
+                body = {}
+        
+        # Also check query parameters for GET requests
+        if hasattr(request, 'args') and request.args:
+            body.update(request.args)
+        elif hasattr(request, 'query_string') and request.query_string:
             query_string = request.query_string.decode('utf-8')
-            body = dict(urllib.parse.parse_qsl(query_string))
+            query_params = dict(urllib.parse.parse_qsl(query_string))
+            body.update(query_params)
         
         # Get parameters
         webhook_url = body.get('webhook')
@@ -334,8 +349,37 @@ def handler(request):
         }
 
 # Vercel serverless function entry point
+def lambda_handler(event, context):
+    """AWS Lambda style handler for Vercel compatibility"""
+    class MockRequest:
+        def __init__(self, event):
+            self.method = event.get('httpMethod', 'GET')
+            self.body = event.get('body', '{}')
+            self.query_string = event.get('queryStringParameters', {})
+            
+            # Convert query parameters to string format
+            if self.query_string:
+                query_parts = []
+                for key, value in self.query_string.items():
+                    query_parts.append(f"{key}={value}")
+                self.query_string = '&'.join(query_parts)
+            else:
+                self.query_string = ''
+        
+        def json(self):
+            if self.body:
+                return json.loads(self.body)
+            return {}
+    
+    request = MockRequest(event)
+    return handler(request)
+
+# Vercel serverless function entry point
 def main(request):
     return handler(request)
+
+# Default Vercel entry point
+handler_func = handler
 
 # For local testing
 if __name__ == "__main__":
