@@ -240,8 +240,67 @@ class GoFileScanner:
         
         return self.scan_specific_ids(common_patterns)
 
-def handler(request):
+# Vercel entry point - this is the main function Vercel will call
+def handler(event, context=None):
     """Main handler for Vercel serverless function"""
+    
+    # Handle AWS Lambda style event
+    if isinstance(event, dict) and 'httpMethod' in event:
+        # AWS Lambda format
+        method = event.get('httpMethod', 'GET')
+        body = event.get('body', '{}')
+        query_params = event.get('queryStringParameters', {}) or {}
+        
+        # Create request-like object
+        class Request:
+            def __init__(self):
+                self.method = method
+                self.body = body
+                self.args = query_params
+        
+        request = Request()
+        
+        # Parse body if it's a POST request
+        if method == 'POST' and body:
+            try:
+                if isinstance(body, str):
+                    parsed_body = json.loads(body)
+                else:
+                    parsed_body = body
+            except:
+                parsed_body = {}
+        else:
+            parsed_body = {}
+        
+        # Merge query params and body
+        all_params = {**query_params, **parsed_body}
+        
+    else:
+        # Direct request object (for testing)
+        request = event
+        all_params = {}
+        
+        if hasattr(request, 'json') and callable(request.json):
+            try:
+                all_params = request.json()
+            except:
+                pass
+        elif hasattr(request, 'body') and request.body:
+            try:
+                if isinstance(request.body, str):
+                    all_params = json.loads(request.body)
+                else:
+                    all_params = json.loads(request.body.decode('utf-8'))
+            except:
+                pass
+        
+        # Also check query parameters for GET requests
+        if hasattr(request, 'args') and request.args:
+            all_params.update(request.args)
+        elif hasattr(request, 'query_string') and request.query_string:
+            query_string = request.query_string.decode('utf-8')
+            query_params = dict(urllib.parse.parse_qsl(query_string))
+            all_params.update(query_params)
     
     # Enable CORS
     headers = {
@@ -252,7 +311,13 @@ def handler(request):
     }
     
     # Handle OPTIONS request for CORS
-    if request.method == 'OPTIONS':
+    if isinstance(event, dict) and event.get('httpMethod') == 'OPTIONS':
+        return {
+            'statusCode': 200,
+            'headers': headers,
+            'body': ''
+        }
+    elif hasattr(request, 'method') and request.method == 'OPTIONS':
         return {
             'statusCode': 200,
             'headers': headers,
@@ -260,39 +325,12 @@ def handler(request):
         }
     
     try:
-        # Parse request body for Vercel
-        body = {}
-        
-        if hasattr(request, 'json') and callable(request.json):
-            # Vercel's request object has json() method
-            try:
-                body = request.json()
-            except:
-                body = {}
-        elif hasattr(request, 'body') and request.body:
-            # Fallback to raw body parsing
-            try:
-                if isinstance(request.body, str):
-                    body = json.loads(request.body)
-                else:
-                    body = json.loads(request.body.decode('utf-8'))
-            except:
-                body = {}
-        
-        # Also check query parameters for GET requests
-        if hasattr(request, 'args') and request.args:
-            body.update(request.args)
-        elif hasattr(request, 'query_string') and request.query_string:
-            query_string = request.query_string.decode('utf-8')
-            query_params = dict(urllib.parse.parse_qsl(query_string))
-            body.update(query_params)
-        
-        # Get parameters
-        webhook_url = body.get('webhook')
-        count = int(body.get('count', 100))
-        threads = int(body.get('threads', 50))
-        delay = float(body.get('delay', 0.1))
-        patterns = body.get('patterns', 'false').lower() == 'true'
+        # Get parameters from merged params
+        webhook_url = all_params.get('webhook')
+        count = int(all_params.get('count', 100))
+        threads = int(all_params.get('threads', 50))
+        delay = float(all_params.get('delay', 0.1))
+        patterns = all_params.get('patterns', 'false').lower() == 'true'
         
         # Validate parameters
         if count > 1000:
@@ -401,5 +439,5 @@ if __name__ == "__main__":
         })
     )
     
-    result = main(test_request)
+    result = handler(test_request)
     print(json.dumps(json.loads(result['body']), indent=2))
